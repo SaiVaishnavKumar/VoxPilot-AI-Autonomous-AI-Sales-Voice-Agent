@@ -45,6 +45,7 @@ export default function VoiceAgentPage() {
   const [callId, setCallId] = useState(null);
   const [callStatus, setCallStatus] = useState('Idle'); // Idle | Ready | Listening | Processing | Speaking | Ended
   const [language, setLanguage] = useState('en');
+  const [callAiMode, setCallAiMode] = useState('demo');
   const [voices, setVoices] = useState([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState('');
   const [isMuted, setIsMuted] = useState(false);
@@ -61,20 +62,24 @@ export default function VoiceAgentPage() {
   const [callSummary, setCallSummary] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [microphoneSupported, setMicrophoneSupported] = useState(true);
+  const [browserSpeechSupported, setBrowserSpeechSupported] = useState(false);
   const [speechSynthesisSupported, setSpeechSynthesisSupported] = useState(true);
 
   const [analyserNode, setAnalyserNode] = useState(null);
   const audioCtxRef = useRef(null);
   const micStreamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
+  const speechRecognitionRef = useRef(null);
   const audioChunksRef = useRef([]);
   const transcriptEndRef = useRef(null);
   const callActiveRef = useRef(false);
 
   // Load browser TTS voices
   useEffect(() => {
+    const hasBrowserSpeech = Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+    setBrowserSpeechSupported(hasBrowserSpeech);
     setMicrophoneSupported(
-      Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder)
+      hasBrowserSpeech || Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder)
     );
     setSpeechSynthesisSupported(
       Boolean(window.speechSynthesis && window.SpeechSynthesisUtterance)
@@ -141,6 +146,18 @@ export default function VoiceAgentPage() {
   };
 
   const stopMicrophoneStream = () => {
+    const recognition = speechRecognitionRef.current;
+    speechRecognitionRef.current = null;
+    if (recognition) {
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try {
+        recognition.abort();
+      } catch {
+        // Recognition may already have ended.
+      }
+    }
     const recorder = mediaRecorderRef.current;
     mediaRecorderRef.current = null;
     audioChunksRef.current = [];
@@ -200,6 +217,7 @@ export default function VoiceAgentPage() {
       const res = await api.startCall({ language, industry: 'real-estate' });
       setCallId(res.call.id);
       setTranscript(res.call.transcript || []);
+      setCallAiMode(res.aiMode || 'demo');
       callActiveRef.current = true;
       setCallStatus('Ready');
       speakText(res.openingGreeting);
@@ -255,6 +273,7 @@ export default function VoiceAgentPage() {
       });
 
       setTranscript(res.call.transcript || []);
+      setCallAiMode(res.mode || 'demo');
       setExtracted(res.extracted || {});
       if (res.rag?.sources?.length > 0) {
         setRagSources(res.rag.sources);
@@ -318,6 +337,18 @@ export default function VoiceAgentPage() {
     }
 
     if (isListening) {
+      const recognition = speechRecognitionRef.current;
+      if (recognition) {
+        setCallStatus('Processing');
+        try {
+          recognition.stop();
+        } catch {
+          speechRecognitionRef.current = null;
+          setIsListening(false);
+          setCallStatus('Ready');
+        }
+        return;
+      }
       const recorder = mediaRecorderRef.current;
       if (!recorder || recorder.state === 'inactive') {
         stopMicrophoneStream();
@@ -337,6 +368,50 @@ export default function VoiceAgentPage() {
       );
       return;
     }
+    if (browserSpeechSupported) {
+      const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognition = new Recognition();
+      recognition.lang = language === 'hi' ? 'hi-IN' : 'en-IN';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      recognition.onresult = (event) => {
+        const recognizedText = String(event.results?.[0]?.[0]?.transcript || '').trim();
+        if (!recognizedText) {
+          setErrorMsg('No speech was detected. Try again or type your message instead.');
+          setCallStatus('Ready');
+          return;
+        }
+        setCallStatus('Processing');
+        sendMessageToAI(recognizedText);
+      };
+      recognition.onerror = (event) => {
+        const messages = {
+          'not-allowed': 'Microphone access was denied. Allow microphone access for this site and try again.',
+          'no-speech': 'No speech was detected. Try speaking closer to the microphone.',
+          network: 'Browser speech recognition is unavailable on this network. Use text input or try Chrome/Edge.',
+        };
+        setErrorMsg(messages[event.error] || `Speech recognition failed (${event.error || 'unknown error'}). You can use text input.`);
+        setCallStatus('Ready');
+      };
+      recognition.onend = () => {
+        speechRecognitionRef.current = null;
+        setIsListening(false);
+        setCallStatus((status) => (status === 'Listening' ? 'Ready' : status));
+      };
+      speechRecognitionRef.current = recognition;
+      try {
+        recognition.start();
+        setIsListening(true);
+        setCallStatus('Listening');
+      } catch (err) {
+        speechRecognitionRef.current = null;
+        setErrorMsg(`Could not start browser speech recognition: ${err.message || 'Unknown error.'}`);
+        setCallStatus('Ready');
+      }
+      return;
+    }
+
     if (systemStatus?.ai?.configured === false) {
       setErrorMsg(
         'Gemini microphone transcription requires GEMINI_API_KEY in the project root .env file. Add it and restart the backend, or use text input.'
@@ -436,15 +511,15 @@ export default function VoiceAgentPage() {
 
               <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-500/15 border border-blue-400/25 px-3 py-1 text-xs text-blue-200">
                 <Sparkles className="h-3.5 w-3.5" />
-                {systemStatus?.ai?.mode === 'gemini' ? 'Gemini AI' : 'Demo Mode'}
+                {callAiMode === 'gemini' ? 'Gemini AI' : 'Demo Mode'}
               </span>
             </div>
             <p className="text-xs text-slate-400 pt-1">
-              {microphoneSupported
-                ? systemStatus?.ai?.configured
-                  ? 'Gemini transcription is ready. Audio is sent for transcription when you stop recording.'
-                  : 'Add GEMINI_API_KEY to enable cloud microphone transcription. Text input remains available.'
-                : 'Microphone recording is unavailable in this browser. Text input remains available.'}{' '}
+              {browserSpeechSupported
+                ? 'Browser speech recognition is used for microphone input, so Gemini transcription availability will not block voice input.'
+                : microphoneSupported && systemStatus?.ai?.configured
+                  ? 'Gemini will transcribe your recording when you stop. You can also use text input.'
+                  : 'Voice recognition is unavailable here. Use Chrome or Edge, or type your message.'}{' '}
               {speechSynthesisSupported
                 ? 'AI speech playback is ready.'
                 : 'AI speech playback is unavailable in this browser.'}
@@ -658,7 +733,7 @@ export default function VoiceAgentPage() {
             >
               {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
               <span className="hidden sm:inline">
-                {isListening ? 'Stop & Transcribe' : 'Speak'}
+                {isListening ? (browserSpeechSupported ? 'Stop' : 'Stop & Transcribe') : 'Speak'}
               </span>
             </button>
 

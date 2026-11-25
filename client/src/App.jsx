@@ -1,15 +1,16 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import DashboardLayout from './layouts/DashboardLayout';
-import AppointmentsPage from './pages/AppointmentsPage';
-import AnalyticsPage from './pages/AnalyticsPage';
-import CallsPage from './pages/CallsPage';
-import DashboardPage from './pages/DashboardPage';
-import KnowledgePage from './pages/KnowledgePage';
-import LeadsPage from './pages/LeadsPage';
-import LoginPage from './pages/LoginPage';
-import VoiceAgentPage from './pages/VoiceAgentPage';
+
+const AppointmentsPage = lazy(() => import('./pages/AppointmentsPage'));
+const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage'));
+const CallsPage = lazy(() => import('./pages/CallsPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const KnowledgePage = lazy(() => import('./pages/KnowledgePage'));
+const LeadsPage = lazy(() => import('./pages/LeadsPage'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const VoiceAgentPage = lazy(() => import('./pages/VoiceAgentPage'));
 
 function LoadingScreen() {
   return (
@@ -50,9 +51,11 @@ function ProtectedRoutes() {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginRoute />} />
-      <Route path="/*" element={<ProtectedRoutes />} />
-    </Routes>
+    <Suspense fallback={<LoadingScreen />}>
+      <Routes>
+        <Route path="/login" element={<LoginRoute />} />
+        <Route path="/*" element={<ProtectedRoutes />} />
+      </Routes>
+    </Suspense>
   );
 }

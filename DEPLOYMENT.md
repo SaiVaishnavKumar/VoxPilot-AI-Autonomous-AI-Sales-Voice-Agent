@@ -11,6 +11,8 @@ This repository contains a Vite/React frontend and a separate Express API. Netli
 
 The frontend defaults to `/api` for local development, where Vite proxies requests to the local Express server. A Netlify deploy without `VITE_API_URL` will send API requests back to Netlify, where no API exists, so login and live AI calls will fail even if the page itself loads.
 
+The microphone uses the browser's speech recognition service first when the browser provides it (commonly Chrome and Edge). Other browsers transcribe through Gemini, which requires a valid API key and can be temporarily overloaded. Text input remains available in either case. Gemini chat also falls back to the deterministic demo engine if the API call fails; the Voice Agent shows the mode returned for the latest reply.
+
 ## Diagnosing production errors
 
 - A 404 on a client route is fixed by the SPA fallback in `netlify.toml`.

@@ -59,20 +59,20 @@ async function transcribeAudio({ audioBuffer, mimeType, language = 'en' }) {
     config: { temperature: 0 },
   };
   let response;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       response = await ai.models.generateContent(generationRequest);
       break;
     } catch (err) {
       if (Number(err.status) !== 503) throw err;
-      if (attempt === 1) {
+      if (attempt === 2) {
         const error = new Error(
-          'Gemini transcription is temporarily busy. Please retry in a minute or use text input.'
+          'Gemini transcription is overloaded right now. Try browser speech recognition in Chrome or Edge, or use text input.'
         );
         error.statusCode = 503;
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
     }
   }
 

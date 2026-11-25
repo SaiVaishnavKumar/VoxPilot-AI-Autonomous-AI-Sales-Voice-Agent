@@ -47,7 +47,7 @@ async function run() {
     env.geminiModel = 'test-gemini-model';
 
     const audioBuffer = Buffer.from('audio fixture');
-    transientFailures = 1;
+    transientFailures = 2;
     const result = await aiService.transcribeAudio({
       audioBuffer,
       mimeType: 'audio/webm;codecs=opus',
@@ -59,7 +59,7 @@ async function run() {
       model: 'test-gemini-model',
     });
     assert.equal(generateContentRequest.model, 'test-gemini-model');
-    assert.equal(generateContentAttempts, 2);
+    assert.equal(generateContentAttempts, 3);
     assert.match(generateContentRequest.contents[0].parts[0].text, /Hindi/);
     assert.deepEqual(generateContentRequest.contents[0].parts[1].inlineData, {
       mimeType: 'audio/webm',
