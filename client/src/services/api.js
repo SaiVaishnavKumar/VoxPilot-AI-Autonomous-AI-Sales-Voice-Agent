@@ -58,6 +58,8 @@ export const api = {
   deleteCall: (id) => request(`/calls/${id}`, { method: 'DELETE' }),
   aiChat: (payload) =>
     request('/ai/chat', { method: 'POST', body: JSON.stringify(payload) }),
+  transcribeAudio: (formData) =>
+    request('/ai/transcribe', { method: 'POST', body: formData }),
   aiAnalyze: (text) =>
     request('/ai/analyze', { method: 'POST', body: JSON.stringify({ text }) }),
 

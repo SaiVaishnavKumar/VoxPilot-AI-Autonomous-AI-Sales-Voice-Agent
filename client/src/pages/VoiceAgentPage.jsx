@@ -53,7 +53,6 @@ export default function VoiceAgentPage() {
   const [durationSeconds, setDurationSeconds] = useState(0);
 
   const [transcript, setTranscript] = useState([]);
-  const [interimText, setInterimText] = useState('');
   const [textInput, setTextInput] = useState('');
   const [extracted, setExtracted] = useState({});
   const [ragSources, setRagSources] = useState([]);
@@ -61,19 +60,25 @@ export default function VoiceAgentPage() {
   const [syncedLead, setSyncedLead] = useState(null);
   const [callSummary, setCallSummary] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
-  const [speechSupported, setSpeechSupported] = useState(true);
+  const [microphoneSupported, setMicrophoneSupported] = useState(true);
+  const [speechSynthesisSupported, setSpeechSynthesisSupported] = useState(true);
 
   const [analyserNode, setAnalyserNode] = useState(null);
   const audioCtxRef = useRef(null);
   const micStreamRef = useRef(null);
-  const recognitionRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
   const transcriptEndRef = useRef(null);
   const callActiveRef = useRef(false);
 
   // Load browser TTS voices
   useEffect(() => {
-    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    setSpeechSupported(Boolean(SpeechRec));
+    setMicrophoneSupported(
+      Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder)
+    );
+    setSpeechSynthesisSupported(
+      Boolean(window.speechSynthesis && window.SpeechSynthesisUtterance)
+    );
 
     const loadVoices = () => {
       const list = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
@@ -108,7 +113,7 @@ export default function VoiceAgentPage() {
   // Auto scroll transcript
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [transcript, interimText]);
+  }, [transcript, isListening]);
 
   // Cleanup mic/speech on unmount
   useEffect(() => {
@@ -118,15 +123,7 @@ export default function VoiceAgentPage() {
     };
   }, []);
 
-  const stopMicrophoneStream = () => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {
-        // ignore
-      }
-      recognitionRef.current = null;
-    }
+  const releaseMicrophoneResources = () => {
     if (micStreamRef.current) {
       micStreamRef.current.getTracks().forEach((t) => t.stop());
       micStreamRef.current = null;
@@ -143,10 +140,30 @@ export default function VoiceAgentPage() {
     setIsListening(false);
   };
 
+  const stopMicrophoneStream = () => {
+    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    audioChunksRef.current = [];
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      recorder.onerror = null;
+      if (recorder.state !== 'inactive') {
+        recorder.stop();
+      }
+    }
+    releaseMicrophoneResources();
+  };
+
   const speakText = (text) => {
-    if (isMuted || !window.speechSynthesis || !text) return;
+    if (isMuted || !text) return;
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
+      setErrorMsg('Browser speech playback is unavailable. You can continue using text input.');
+      return;
+    }
+
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
+    const utterance = new window.SpeechSynthesisUtterance(text);
     utterance.lang = language === 'hi' ? 'hi-IN' : 'en-IN';
     const voiceObj = voices.find((v) => v.voiceURI === selectedVoiceURI);
     if (voiceObj) utterance.voice = voiceObj;
@@ -160,9 +177,12 @@ export default function VoiceAgentPage() {
       setIsSpeaking(false);
       if (callActiveRef.current) setCallStatus('Ready');
     };
-    utterance.onerror = () => {
+    utterance.onerror = (event) => {
       setIsSpeaking(false);
       if (callActiveRef.current) setCallStatus('Ready');
+      if (event.error !== 'canceled' && event.error !== 'interrupted') {
+        setErrorMsg('Browser speech playback failed. Check your selected voice and audio output.');
+      }
     };
     window.speechSynthesis.speak(utterance);
   };
@@ -212,7 +232,7 @@ export default function VoiceAgentPage() {
   const sendMessageToAI = async (msgText) => {
     const clean = String(msgText || '').trim();
     if (!clean) return;
-    if (!callId) {
+    if (!callId || !callActiveRef.current) {
       setErrorMsg('Please click "Start AI Call" first.');
       return;
     }
@@ -258,6 +278,39 @@ export default function VoiceAgentPage() {
     sendMessageToAI(msg);
   };
 
+  const transcribeRecording = async (recorder) => {
+    const mimeType = recorder.mimeType || 'audio/webm';
+    const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+    audioChunksRef.current = [];
+    mediaRecorderRef.current = null;
+    releaseMicrophoneResources();
+
+    if (!audioBlob.size) {
+      setErrorMsg('No audio was captured. Try speaking closer to the microphone.');
+      setCallStatus('Ready');
+      return;
+    }
+
+    try {
+      const formData = new FormData();
+      const extension = mimeType.split('/')[1]?.split(';')[0] || 'webm';
+      formData.append('audio', audioBlob, `voice-turn.${extension}`);
+      formData.append('language', language);
+      const result = await api.transcribeAudio(formData);
+      if (!callActiveRef.current) return;
+      const recognizedText = String(result.text || '').trim();
+      if (!recognizedText) {
+        setErrorMsg('No speech was detected. Try again or type your message instead.');
+        setCallStatus('Ready');
+        return;
+      }
+      await sendMessageToAI(recognizedText);
+    } catch (err) {
+      setErrorMsg(err.message || 'Unable to transcribe this recording.');
+      setCallStatus('Ready');
+    }
+  };
+
   const toggleMicrophone = async () => {
     if (!callId || callStatus === 'Ended') {
       setErrorMsg('Start an AI Call before activating the microphone.');
@@ -265,90 +318,84 @@ export default function VoiceAgentPage() {
     }
 
     if (isListening) {
-      stopMicrophoneStream();
-      setCallStatus('Ready');
+      const recorder = mediaRecorderRef.current;
+      if (!recorder || recorder.state === 'inactive') {
+        stopMicrophoneStream();
+        setCallStatus('Ready');
+        return;
+      }
+      setCallStatus('Processing');
+      recorder.onstop = () => transcribeRecording(recorder);
+      recorder.stop();
       return;
     }
 
     setErrorMsg('');
-    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRec) {
+    if (!microphoneSupported) {
       setErrorMsg(
-        'Web Speech Recognition is not supported in this browser. Please use Chrome/Edge or the text input fallback below.'
+        'Microphone recording is not supported in this browser. Use Chrome or Edge, or type your message instead.'
+      );
+      return;
+    }
+    if (systemStatus?.ai?.configured === false) {
+      setErrorMsg(
+        'Gemini microphone transcription requires GEMINI_API_KEY in the project root .env file. Add it and restart the backend, or use text input.'
       );
       return;
     }
 
     try {
-      // Request mic stream for real-time audio waveform & permission check
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStreamRef.current = stream;
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const audioCtx = new AudioCtx();
-      audioCtxRef.current = audioCtx;
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 128;
-      source.connect(analyser);
-      setAnalyserNode(analyser);
-
-      const recognition = new SpeechRec();
-      recognition.lang = language === 'hi' ? 'hi-IN' : 'en-IN';
-      recognition.interimResults = true;
-      recognition.continuous = false;
-
-      recognition.onstart = () => {
-        setIsListening(true);
-        setCallStatus('Listening');
-      };
-
-      recognition.onresult = (event) => {
-        let interim = '';
-        let finalStr = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const piece = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalStr += piece;
-          } else {
-            interim += piece;
-          }
+      if (AudioCtx) {
+        try {
+          const audioCtx = new AudioCtx();
+          audioCtxRef.current = audioCtx;
+          const source = audioCtx.createMediaStreamSource(stream);
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 128;
+          source.connect(analyser);
+          setAnalyserNode(analyser);
+        } catch (err) {
+          setErrorMsg(`Microphone recording started, but its waveform is unavailable: ${err.message}`);
         }
-        setInterimText(interim);
-        if (finalStr.trim()) {
-          setInterimText('');
-          stopMicrophoneStream();
-          sendMessageToAI(finalStr.trim());
+      }
+
+      const supportedTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+      const mimeType = supportedTypes.find((type) =>
+        window.MediaRecorder.isTypeSupported?.(type)
+      );
+      const recorder = mimeType
+        ? new window.MediaRecorder(stream, { mimeType })
+        : new window.MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
         }
       };
-
-      recognition.onerror = (ev) => {
-        setInterimText('');
+      recorder.onerror = (event) => {
         stopMicrophoneStream();
-        if (ev.error === 'not-allowed') {
-          setErrorMsg(
-            'Microphone permission was denied. Allow microphone access in browser settings or use the text input fallback.'
-          );
-        } else if (ev.error !== 'aborted' && ev.error !== 'no-speech') {
-          setErrorMsg(`Speech recognition error (${ev.error}). You can use text input anytime.`);
-        }
+        setErrorMsg(
+          `Microphone recording failed: ${event.error?.message || 'Unknown recording error.'}`
+        );
         if (callActiveRef.current) setCallStatus('Ready');
       };
-
-      recognition.onend = () => {
-        setIsListening(false);
-        setInterimText('');
-        if (callActiveRef.current && callStatus === 'Listening') {
-          setCallStatus('Ready');
-        }
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-    } catch {
+      recorder.start();
+      setIsListening(true);
+      setCallStatus('Listening');
+    } catch (err) {
       stopMicrophoneStream();
-      setErrorMsg(
-        'Microphone access unavailable or blocked. Please use the text input fallback below.'
-      );
+      if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
+        setErrorMsg('Microphone access was denied. Allow microphone access for localhost and try again.');
+      } else if (err.name === 'NotFoundError') {
+        setErrorMsg('No microphone was found. Connect a microphone or use text input instead.');
+      } else {
+        setErrorMsg(`Could not start microphone recording: ${err.message || 'Unknown error.'}`);
+      }
+      setCallStatus('Ready');
     }
   };
 
@@ -393,9 +440,14 @@ export default function VoiceAgentPage() {
               </span>
             </div>
             <p className="text-xs text-slate-400 pt-1">
-              {speechSupported
-                ? 'Browser Speech Recognition & Synthesis ready. Text fallback always active.'
-                : 'Speech Recognition unavailable in this browser — use Text Input Fallback below.'}
+              {microphoneSupported
+                ? systemStatus?.ai?.configured
+                  ? 'Gemini transcription is ready. Audio is sent for transcription when you stop recording.'
+                  : 'Add GEMINI_API_KEY to enable cloud microphone transcription. Text input remains available.'
+                : 'Microphone recording is unavailable in this browser. Text input remains available.'}{' '}
+              {speechSynthesisSupported
+                ? 'AI speech playback is ready.'
+                : 'AI speech playback is unavailable in this browser.'}
             </p>
           </div>
 
@@ -553,10 +605,10 @@ export default function VoiceAgentPage() {
               })
             )}
 
-            {interimText && (
+            {isListening && (
               <div className="flex justify-end">
                 <div className="max-w-[80%] rounded-2xl bg-blue-100 text-blue-900 px-4 py-2 text-xs italic">
-                  Listening: &ldquo;{interimText}...&rdquo;
+                  Recording audio. Stop to transcribe and send your message.
                 </div>
               </div>
             )}
@@ -597,7 +649,7 @@ export default function VoiceAgentPage() {
             <button
               type="button"
               onClick={toggleMicrophone}
-              disabled={!isCallActive}
+              disabled={!isCallActive || callStatus === 'Processing' || isSpeaking}
               className={`shrink-0 flex items-center gap-1.5 rounded-xl px-3.5 py-2.5 text-xs font-semibold transition-all disabled:opacity-40 ${
                 isListening
                   ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 animate-pulse'
@@ -605,7 +657,9 @@ export default function VoiceAgentPage() {
               }`}
             >
               {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-              <span className="hidden sm:inline">{isListening ? 'Stop Mic' : 'Speak'}</span>
+              <span className="hidden sm:inline">
+                {isListening ? 'Stop & Transcribe' : 'Speak'}
+              </span>
             </button>
 
             <input

@@ -22,7 +22,7 @@ const env = {
   mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/voxpilot_ai',
   sqlitePath: path.resolve(__dirname, '..', process.env.SQLITE_PATH || './data/voxpilot.db'),
   geminiApiKey: (process.env.GEMINI_API_KEY || '').trim(),
-  geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
   companyName: process.env.COMPANY_NAME || 'Horizon Crest Realty',
   defaultIndustry: process.env.DEFAULT_INDUSTRY || 'real-estate',
 };

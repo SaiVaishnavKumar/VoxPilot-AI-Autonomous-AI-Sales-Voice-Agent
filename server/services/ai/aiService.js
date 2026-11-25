@@ -22,6 +22,70 @@ function getAIStatus() {
   };
 }
 
+async function transcribeAudio({ audioBuffer, mimeType, language = 'en' }) {
+  if (!getAIStatus().configured) {
+    const error = new Error(
+      'Gemini speech transcription is not configured. Add GEMINI_API_KEY to the project root .env file and restart the backend.'
+    );
+    error.statusCode = 503;
+    throw error;
+  }
+  if (!Buffer.isBuffer(audioBuffer) || audioBuffer.length === 0) {
+    const error = new Error('Audio data is empty. Record a short message and try again.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const languageName = language === 'hi' ? 'Hindi' : 'English';
+  const ai = new GoogleGenAI({ apiKey: env.geminiApiKey });
+  const generationRequest = {
+    model: env.geminiModel,
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: `Transcribe the attached speech in ${languageName}. Return only the words actually spoken. Do not answer, translate, summarize, or add commentary.`,
+          },
+          {
+            inlineData: {
+              mimeType: String(mimeType || 'audio/webm').split(';')[0],
+              data: audioBuffer.toString('base64'),
+            },
+          },
+        ],
+      },
+    ],
+    config: { temperature: 0 },
+  };
+  let response;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      response = await ai.models.generateContent(generationRequest);
+      break;
+    } catch (err) {
+      if (Number(err.status) !== 503) throw err;
+      if (attempt === 1) {
+        const error = new Error(
+          'Gemini transcription is temporarily busy. Please retry in a minute or use text input.'
+        );
+        error.statusCode = 503;
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+
+  const text = String(response.text || '').trim();
+  if (!text) {
+    const error = new Error('No speech was detected. Try again or type your message instead.');
+    error.statusCode = 422;
+    throw error;
+  }
+
+  return { text, model: env.geminiModel };
+}
+
 function parseIndianCurrency(text) {
   const lower = String(text || '').toLowerCase().replace(/,/g, '');
   // Match crore / cr
@@ -623,6 +687,7 @@ async function analyzeMessage(text) {
 
 module.exports = {
   getAIStatus,
+  transcribeAudio,
   processConversationTurn,
   summarizeCall,
   analyzeMessage,

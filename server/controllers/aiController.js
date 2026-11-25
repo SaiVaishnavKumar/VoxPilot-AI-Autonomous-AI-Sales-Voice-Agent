@@ -227,8 +227,26 @@ async function status(req, res) {
   });
 }
 
+async function transcribe(req, res, next) {
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'Audio file is required.' });
+  }
+
+  try {
+    const result = await aiService.transcribeAudio({
+      audioBuffer: req.file.buffer,
+      mimeType: req.file.mimetype,
+      language: req.body?.language,
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   chat,
+  transcribe,
   analyze,
   summarize,
   qualify,
