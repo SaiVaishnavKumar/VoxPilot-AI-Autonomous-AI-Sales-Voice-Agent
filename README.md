@@ -58,3 +58,13 @@ npm run test:api
 ```
 
 Deployment guidance for hosting the frontend and API separately is in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## Interview-day checklist
+
+- Laptop with the project installed and ready to run.
+- GitHub repository/source code: [VoxPilot AI](https://github.com/SaiVaishnavKumar/VoxPilot-AI-Autonomous-AI-Sales-Voice-Agent).
+- System architecture diagram: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- Updated printed resume.
+- College ID card.
+
+Bring your resume and ID yourself; do not upload personal identity documents to this public repository.
